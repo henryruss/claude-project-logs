@@ -1,34 +1,47 @@
-# projectManager
+# VibePM — Portfolio Restructure
 
 **Date:** 2026-03-03
 **Location:** /Users/henryrussell/Projects/projectManager
 **Stage:** in-progress
 **GitHub:** https://github.com/henryruss/vibepm
+**Category:** website
 
 ## Summary
-Unified the `/log` slash command with VibePM so that running `/log` at the end of any session automatically commits project code, detects the project lifecycle stage, writes a structured log with stage and GitHub URL metadata, updates all session context files (MEMORY.md, planning.md, CLAUDE.md), and pushes the log to trigger VibePM's webhook for automatic card creation/updates.
+Transformed VibePM from a kanban task board into an AI project portfolio headquarters. Added two-category organization (Websites/Webapps and Agents) with a PortfolioGrid as the primary view, per-project todos and notes, an AddProjectModal, and PDF export for both individual projects and full portfolio summaries.
 
 ## Tech Stack
 - Next.js 15 (App Router) + React 19 + TypeScript
 - Tailwind CSS v4
-- Supabase (Postgres + Auth + RLS)
-- GitHub OAuth via Supabase Auth
 - @dnd-kit/core + @dnd-kit/sortable
-- Vercel (deployment)
-- GitHub Webhooks (auto-sync)
+- jspdf (new)
+- Supabase (Postgres + Auth + RLS)
+- Vercel
 
 ## Files Built
-- `~/.claude/commands/log.md` — rewrote `/log` command: now commits code, creates repos, detects stage, updates context files, writes structured logs
-- `src/lib/parseProjectLog.ts` — added `stage` and `github_repo_url` fields to parser interface and extraction logic
-- `src/app/api/webhook/github/route.ts` — webhook uses parsed stage (fallback "complete") and includes github_repo_url in insert/update
-- `scripts/import-logs.ts` — import script uses parsed stage and github_repo_url
-- `CLAUDE.md` — updated deployment status and parser description
+- `src/components/portfolio/PortfolioGrid.tsx` — Main portfolio view with category sections, project counts, deployed counts
+- `src/components/portfolio/PortfolioCard.tsx` — Rich project card with status badge, tech stack pills, GitHub/URL links, relative timestamps
+- `src/components/portfolio/AddProjectModal.tsx` — New project modal with category and stage selectors
+- `src/lib/exportPdf.ts` — PDF generation for single project reports and full portfolio summaries
+- `src/lib/projectUtils.ts` — Status helpers: isDeployed, getStatusLabel, getStatusColor, getRelativeTime
+- `src/lib/types.ts` — Added ProjectCategory type, category field, project_id on TodoItem/NoteData
+- `src/components/Dashboard.tsx` — Replaced sidebar layout with Portfolio/Pipeline view toggle + export button
+- `src/components/projects/ProjectDetailView.tsx` — Expanded to max-w-2xl with category/stage editing, GitHub URL, per-project todos/notes, export PDF
+- `src/hooks/useProjects.ts` — Category support in addProject + getCategoryProjects filter
+- `src/hooks/useSupabaseTodos.ts` — Optional projectId filtering for per-project scoping
+- `src/hooks/useSupabaseNotes.ts` — Optional projectId filtering for per-project scoping
+- `src/lib/parseProjectLog.ts` — Parse **Category:** field from log markdown
+- `src/app/api/webhook/github/route.ts` — Pass category through on upsert
+- `src/app/globals.css` — Category colors (teal/purple), view transition animation, print styles
+- `supabase/schema.sql` — Added category column, project_id FK on todos/notes
 
 ## Key Decisions
-- `/log` is the single end-of-session command — handles code commits, context updates, and log generation in one flow
-- Webhook only overwrites stage if the parsed value is non-null, preventing accidental downgrades
-- Backward compatible: old logs without Stage/GitHub fields parse as null and fall back to existing defaults
+- Portfolio grid is the default view; kanban preserved as togglable "Pipeline" secondary view
+- Todos and notes moved from global sidebar to per-project (project_id FK with cascade delete)
+- Category defaults to "website" for backward compatibility with existing projects
+- PDF export uses dynamic import to lazy-load jspdf only when needed
+- Webhook only sets category if parsed value is valid ("website" or "agent")
 
 ## Lessons Learned
-- The `/log` command is a Claude Code slash command (stored in `~/.claude/commands/`), not a VibePM feature — it orchestrates across both the project repo and the logs repo
-- Keeping parser changes backward-compatible (null defaults) avoids breaking existing imported logs
+- Tailwind v4 does not resolve dynamic class names like `border-${variable}` — must use pre-defined style maps with full class strings
+- JSX.Element type is not available in all TypeScript configs — use React.ReactNode instead
+- Per-project notes need the same "create if not exists" pattern as the global note (PGRST116 error handling)

@@ -6,44 +6,38 @@
 **GitHub:** https://github.com/henryruss/campus-swap-live
 
 ## Summary
-Built Spec #6 (Route Planning) — the logistics layer that bridges seller preferences to ordered truck stop lists. The system handles auto-assignment of sellers to pickup shifts, nearest-neighbor stop ordering, truck capacity management with soft caps, and pickup confirmation emails. All 69 tests pass.
+Implemented Spec #8 — Seller Rescheduling: a token-gated and auth-gated flow that lets sellers pick a new pickup slot without admin intervention. Built on top of Spec #6 (Route Planning). Also fixed several bugs discovered during testing: tracker message ordering, address display using wrong field for on-campus sellers, naive datetime comparison with SQLite, and seller readiness gating.
 
 ## Tech Stack
-- Flask 3.1 / Python 3.13
-- SQLAlchemy + Flask-Migrate (SQLite local, PostgreSQL on Render)
+- Python 3.13 / Flask 3.1
+- SQLAlchemy + Flask-Migrate (PostgreSQL in prod, SQLite locally)
 - Jinja2 server-rendered templates
-- Vanilla JS (fetch POSTs, setInterval auto-refresh)
-- Google Maps Static API (optional — degrades gracefully)
-- Resend email API
-- pytest + pytest-mock
+- Vanilla JS (no React)
+- Resend API (email)
+- pytest (69/69 route planning tests passing)
 
 ## Files Built
-- `migrations/versions/add_route_planning_fields.py` — idempotent migration: 8 new columns, 5 AppSettings, category unit size seeds
-- `templates/admin/routes.html` — full route builder UI: cluster panel, capacity board, auto-assign, move/assign inline
-- `templates/admin/route_settings.html` — capacity config, time windows, Maps key, per-category unit sizes
-- `templates/crew/stops_partial.html` — HTML partial for 30s auto-refresh (no layout extension)
-- `test_route_planning.py` — 69 tests covering all new behavior
-- `app.py` — 10 new routes + 6 helper functions (~400 lines added)
-- `helpers.py` — re-exports 5 new helpers + `get_payout_percentage`
-- `models.py` — 8 new columns, `expire_on_commit=False`, `quality` default, `category_id` nullable
-- `templates/admin/shift_ops.html` — issue alert banner, add truck, notify sellers, stop order badges, access badges
-- `templates/crew/shift.html` — Navigate button, `#stop-list` wrapper, 30s auto-refresh script
-- `templates/layout.html` — Routes nav link (desktop + mobile)
-- `gigaAdminSpec/HANDOFF.md` — full Spec #6 section with deviations
-- `gigaAdminSpec/DECISIONS.md` — 5 new design decisions
-- `CODEBASE.md` — updated models, routes, templates, AppSettings
-- `website-feature-log.md` — Route Planning section added to Admin Features
+- `migrations/versions/add_seller_rescheduling.py` — idempotent migration: reschedule_token table, new ShiftPickup/Shift columns, 3 AppSettings
+- `templates/seller/reschedule.html` — full pickup-window week grid, Mon–Sun columns, prev/next week nav, radio cards
+- `templates/seller/reschedule_confirm.html` — shared success/error confirmation page
+- `app.py` — 8 new helpers, 4 new routes, 6 modified routes, 2358 insertions total
+- `models.py` — RescheduleToken model, new ShiftPickup/Shift fields
+- `test_route_planning.py` — fixture updates for has_pickup_location requirement
+- `gigaAdminSpec/HANDOFF.md` — Spec #8 section added
+- `gigaAdminSpec/DECISIONS.md` — 7 new decisions documented
+- `gigaAdminSpec/SPEC_CHECKLIST.md` — all 99 Spec #8 checks marked ✅
+- `CODEBASE.md` — RescheduleToken model, new routes, new templates, AppSettings
 
 ## Key Decisions
-- **Soft cap only** — no hard blocks on capacity; system warns but always assigns. Admin has final say.
-- **Raw SQL for add_truck** — route uses `db.session.execute(text(...))` instead of ORM to avoid mutating the shared SQLAlchemy identity-mapped object in the test session. This is the only clean way to satisfy `assert data['new_truck_number'] == shift_week1_am.trucks + 1` when test and route share the same scoped session.
-- **`expire_on_commit=False`** — set globally on SQLAlchemy session. Tests share a real `campus.db` (not a temp file — SQLALCHEMY_DATABASE_URI override after `db.init_app()` is ignored because the engine is already created). With default `expire_on_commit=True`, post-commit attribute access reloads from DB, surfacing route side effects into test assertions. Setting False makes in-memory values stable.
-- **`stop_order` is shift-scoped** — ordering runs across all stops at once; movers filter by truck_number. Simpler than per-truck ordering.
-- **Navigate button uses `pickup_display` fallback** — on-campus sellers have dorm+room but no street address; `pickup_display` property gives a navigable string for Google Maps.
+- Reschedule eligibility is window-based (PICKUP_WEEK_DATE_RANGES) not Shift-record-based — admin doesn't need to pre-create all shifts
+- Shifts auto-created on demand when seller picks an unmapped date/slot
+- reschedule_max_weeks_forward='0' means no cap (seller can pick any future date in window)
+- Naive datetimes in RescheduleToken — SQLite reads datetimes without tzinfo, comparing to timezone-aware _now_eastern() raises TypeError
+- has_pickup_location gate added to all assign paths — sellers without complete address can't be assigned
+- Pickup Window stat cell locks as soon as ShiftPickup exists, not just after notification email is sent
 
 ## Lessons Learned
-- Flask-SQLAlchemy `db.init_app(app)` creates and caches the engine immediately. Changing `SQLALCHEMY_DATABASE_URI` after that point does NOT change the engine — the test conftest's URI override is silently ignored. Both the test and the route use the real `campus.db`. Design tests that account for this (or use a proper test factory).
-- SQLAlchemy's identity map means `Shift.query.get_or_404(id)` in a route returns the *same Python object* as a fixture-created Shift in the test session. ORM mutations to that object are immediately visible to the test. Use raw SQL when you need to write without affecting the test's in-memory state.
-- `pytest-mock` is not installed by default — needed for `mocker.patch('app.send_email')` in notification tests.
-- `InventoryItem.quality` being NOT NULL with no default means test fixtures that omit it fail at the DB level. A default of 1 is safe and required to support test item creation without the full approval workflow.
-- The `build_geographic_clusters` proximity logic needs careful ordering: named buildings (partner apt, dorm) must be checked before lat/lng proximity, otherwise a partner-apartment seller at shared coordinates could be grouped with a nearby off-campus seller.
+- `_compute_seller_tracker` messages were one stage off: each message described what happened *at* a milestone but was shown while *waiting for* it. Seller with ShiftPickup saw "Driver has your items" because active stage advanced to `picked_up`.
+- `pickup_address` is only set for off_campus_other sellers — on_campus and off_campus_complex sellers use pickup_dorm/room. Ops page and mover view were showing "No address on file" for on-campus sellers. Fix: use `seller.pickup_display` property which handles all 3 location types.
+- Test fixtures for route planning lacked pickup_access_type/pickup_floor/pickup_room after we added has_pickup_location gating — 8 tests broke, fixed by updating fixtures.
+- SQLite stores datetimes as naive strings; Python's _now_eastern() returns timezone-aware. Any DB datetime comparison needs .replace(tzinfo=None).
